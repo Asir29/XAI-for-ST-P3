@@ -17,7 +17,9 @@ def prepare_dataloaders(cfg, return_dataset=False):
             traindata.indices = traindata.indices[:10]
             # valdata.indices = valdata.indices[:10]
 
-        nworkers = cfg.N_WORKERS
+        #nworkers = cfg.N_WORKERS
+        nworkers = 2
+
         trainloader = torch.utils.data.DataLoader(
             traindata, batch_size=cfg.BATCHSIZE, shuffle=True, num_workers=nworkers, pin_memory=True, drop_last=True
         )

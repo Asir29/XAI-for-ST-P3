@@ -42,9 +42,12 @@ def eval(checkpoint_path, dataroot):
     cfg.LIFT.GT_DEPTH = False
     cfg.DATASET.DATAROOT = dataroot
     cfg.DATASET.MAP_FOLDER = dataroot
+    cfg.DATASET.VERSION='mini'
 
     dataroot = cfg.DATASET.DATAROOT
-    nworkers = cfg.N_WORKERS
+    #nworkers = cfg.N_WORKERS
+    nworkers = 2  
+    
     nusc = NuScenes(version='v1.0-{}'.format(cfg.DATASET.VERSION), dataroot=dataroot, verbose=False)
     valdata = FuturePredictionDataset(nusc, 1, cfg)
     valloader = torch.utils.data.DataLoader(
