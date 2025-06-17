@@ -139,8 +139,8 @@ def eval(checkpoint_path, dataroot):
                 cur_time = (i+1)*2
                 metric_planning_val[i](final_traj[:,:cur_time].detach(), labels['gt_trajectory'][:,1:cur_time+1], occupancy[:,:cur_time])
 
-        if index % 100 == 0:
-            save(output, labels, batch, n_present, index, save_path)
+        if index % 5 == 0:
+            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj)
 
 
     results = {}
@@ -171,7 +171,7 @@ def eval(checkpoint_path, dataroot):
     for key, value in results.items():
         print(f'{key} : {value.item()}')
 
-def save(output, labels, batch, n_present, frame, save_path):
+def save(output, labels, batch, n_present, frame, save_path, planned_traj=None):
     hdmap = output['hdmap'].detach()
     segmentation = output['segmentation'][:, n_present - 1].detach()
     pedestrian = output['pedestrian'][:, n_present - 1].detach()
@@ -269,7 +269,16 @@ def save(output, labels, batch, n_present, frame, save_path):
     plt.ylim((0, 200))
     gt_trajs[0, :, :1] = gt_trajs[0, :, :1] * -1
     gt_trajs = (gt_trajs[0, :, :2].cpu().numpy() - bx) / dx
-    plt.plot(gt_trajs[:, 0], gt_trajs[:, 1], linewidth=3.0)
+    plt.plot(gt_trajs[:, 0], gt_trajs[:, 1], linewidth=3.0, label='Ground Truth')
+
+    # Process planned trajectory the same way
+    if planned_traj is not None:
+        planned = planned_traj[0].detach().cpu().numpy()
+        planned[:, 0] = -planned[:, 0]
+        planned = (planned[:, :2] - bx) / dx
+        plt.plot(planned[:, 0], planned[:, 1], linewidth=2.0, color='red', label='Planned Trajectory')
+
+    plt.legend()
 
     plt.savefig(save_path / ('%04d.png' % frame))
     plt.close()

@@ -57,6 +57,7 @@ class Cost_Function(nn.Module):
             concept_mask["rule"]          * rulecost
         )
         cost_fc = comfortcost + progresscost
+        
 
         return cost_fc, cost_fo
 
