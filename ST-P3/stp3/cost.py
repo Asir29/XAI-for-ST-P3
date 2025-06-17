@@ -6,6 +6,15 @@ from stp3.utils.tools import gen_dx_bx
 from stp3.utils.geometry import calculate_birds_eye_view_parameters
 from skimage.draw import polygon
 
+concept_mask = {
+    "obstacle": 1,
+    "lane_divider": 1,
+    "drivable_area": 1,
+    "cost_volume": 1,
+    "rule": 1
+}
+
+
 
 class Cost_Function(nn.Module):
     def __init__(self, cfg):
@@ -40,7 +49,13 @@ class Cost_Function(nn.Module):
         rulecost = torch.clamp(self.rulecost(trajs, drivable_area), 0, 100)
         costvolume = torch.clamp(self.costvolume(trajs, cost_volume), 0, 100)
 
-        cost_fo = safetycost + headwaycost + lrdividercost + costvolume + rulecost
+        cost_fo = (
+            concept_mask["obstacle"]    * safetycost +
+            concept_mask["drivable_area"] * headwaycost +
+            concept_mask["lane_divider"]  * lrdividercost +
+            concept_mask["cost_volume"]   * costvolume +
+            concept_mask["rule"]          * rulecost
+        )
         cost_fc = comfortcost + progresscost
 
         return cost_fc, cost_fo
