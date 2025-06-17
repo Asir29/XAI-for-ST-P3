@@ -14,8 +14,9 @@ def prepare_dataloaders(cfg, return_dataset=False):
         valdata = FuturePredictionDataset(nusc, 1, cfg)
 
         if cfg.DATASET.VERSION == 'mini':
-            traindata.indices = traindata.indices[:10]
-            # valdata.indices = valdata.indices[:10]
+            #traindata.indices = traindata.indices[:10]
+            valdata.indices = valdata.indices[:10]
+            print(f'Using mini dataset with {len(valdata.indices)} validation samples.')
 
         #nworkers = cfg.N_WORKERS
         nworkers = 2
