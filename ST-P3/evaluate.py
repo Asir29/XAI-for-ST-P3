@@ -123,7 +123,7 @@ def eval(checkpoint_path, dataroot):
 
         if cfg.PLANNING.ENABLED:
             occupancy = torch.logical_or(seg_prediction, pedestrian_prediction)
-            _, final_traj, aggregated_costs = model.planning(
+            _, final_traj, aggregated_costs, aggregated_costs_worst, norm_best, norm_worst = model.planning(
                 cam_front=output['cam_front'].detach(),
                 trajs=trajs[:, :, 1:],
                 gt_trajs=labels['gt_trajectory'][:, 1:],
@@ -140,7 +140,7 @@ def eval(checkpoint_path, dataroot):
                 metric_planning_val[i](final_traj[:,:cur_time].detach(), labels['gt_trajectory'][:,1:cur_time+1], occupancy[:,:cur_time])
 
         if index % 10 == 0:
-            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj, aggregated_costs=aggregated_costs)
+            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj, aggregated_costs=aggregated_costs, aggregated_costs_worst=aggregated_costs_worst, norm_best=norm_best, norm_worst=norm_worst)
 
 
     results = {}
@@ -171,7 +171,7 @@ def eval(checkpoint_path, dataroot):
     for key, value in results.items():
         print(f'{key} : {value.item()}')
 
-def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, aggregated_costs=None):
+def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, aggregated_costs=None, aggregated_costs_worst=None, norm_best=None, norm_worst=None):
     hdmap = output['hdmap'].detach()
     segmentation = output['segmentation'][:, n_present - 1].detach()
     pedestrian = output['pedestrian'][:, n_present - 1].detach()
@@ -289,7 +289,7 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
     if aggregated_costs is not None:
         txt_path = save_path / ('%04d.txt' % frame)
         with open(txt_path, 'w') as f:
-            f.write(f"Planned Trajectory costs: \n")
+            f.write(f"Planned Trajectory costs: \n\n")
 
             for concept, val in aggregated_costs.items():
                 try:
@@ -299,6 +299,47 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
                 f.write(f"{concept}: {cost_val:.4f}\n")
 
             f.write(f"####################\n")
+
+            f.write(f"Worst Planned Trajectory costs: \n\n")
+
+
+            for concept, val in aggregated_costs_worst.items():
+              try:
+                    cost_val = val[0].item()  # assuming batch size 1
+              except Exception:
+                    cost_val = float(val)
+              f.write(f"{concept}: {cost_val:.4f}\n")
+
+            f.write(f"####################\n")
+
+            f.write(f"NORMALIZED Planned Trajectory costs: \n\n")
+
+            for concept, val in norm_best.items():
+              try:
+                    cost_val = val[0].item()  # assuming batch size 1
+              except Exception:
+                    cost_val = float(val)
+              f.write(f"{concept}: {cost_val:.4f}\n")
+
+            f.write(f"####################\n")
+
+            f.write(f"NORMALIZED Worst Planned Trajectory costs: \n\n")
+
+
+            for concept, val in norm_worst.items():
+              try:
+                    cost_val = val[0].item()  # assuming batch size 1
+              except Exception:
+                    cost_val = float(val)
+              f.write(f"{concept}: {cost_val:.4f}\n")
+
+            f.write(f"####################\n")
+
+
+
+
+
+            
                 
 
     plt.close()

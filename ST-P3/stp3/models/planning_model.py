@@ -53,64 +53,122 @@ class Planning(nn.Module):
         drivable_area: torch.Tensor(B, 1/2, 200, 200)
         target_points: torch.Tensor<float> (B, 2)
         '''
+        # Define batch size and batch indices first
+        batch_size = trajs.shape[0]
+        batch_indices = torch.arange(batch_size, device=trajs.device)  # shape: (B,)
+
+        # Compute costs
         sm_cost_fc, sm_cost_fo, all_costs, safetycost = self.cost_function(
             cost_volume, trajs[:, :, :, :2], semantic_pred, lane_divider, drivable_area, target_points
         )
 
-        # Debug combined costs
-        print(f"[select] sm_cost_fc shape: {sm_cost_fc.shape}, min/max/mean: {sm_cost_fc.min().item():.4f}/{sm_cost_fc.max().item():.4f}/{sm_cost_fc.mean().item():.4f}")
-        print(f"[select] sm_cost_fo shape: {sm_cost_fo.shape}, min/max/mean: {sm_cost_fo.min().item():.4f}/{sm_cost_fo.max().item():.4f}/{sm_cost_fo.mean().item():.4f}")
+        # Compute total cost per trajectory: shape (B, N)
+        CS = sm_cost_fc + sm_cost_fo.sum(dim=-1)
 
-        # Compute total cost per trajectory
-        CS = sm_cost_fc + sm_cost_fo.sum(dim=-1)  # shape: (B, N)
-
-        print(f"[select] Total cost CS shape: {CS.shape}, min/max/mean: {CS.min().item():.4f}/{CS.max().item():.4f}/{CS.mean().item():.4f}")
-
+        # Select best k trajectories (lowest cost)
         CC, KK = torch.topk(CS, k, dim=-1, largest=False)  # KK shape: (B, k)
 
-        batch_size = trajs.shape[0]
-        batch_indices = torch.arange(batch_size, device=trajs.device)  # shape: (B,)
+        # Select worst k trajectories (highest cost)
+        CC_worst, KK_worst = torch.topk(CS, k, dim=-1, largest=True)  # KK_worst shape: (B, k)
+
+        # Selected indices (best and worst)
         selected_indices = KK.squeeze(-1)  # shape: (B,)
+        selected_indices_worst = KK_worst.squeeze(-1)  # shape: (B,)
 
-        print(f"[select] Selected trajectory indices: {selected_indices}")
+        # Select trajectories (best and worst)
+        select_traj = trajs[batch_indices[:, None], KK].squeeze(1)  # (B, n_future, 3)
+        select_traj_worst = trajs[batch_indices[:, None], KK_worst].squeeze(1)  # (B, n_future, 3)
 
-        # Select trajectories
-        select_traj = trajs[batch_indices[:, None], KK].squeeze(1)  # shape: (B, n_future, 3)
-
-        # Extract costs for selected trajectories only
+        # Extract costs for best trajectories
         selected_costs = {}
         for concept, cost_tensor in all_costs.items():
-            #print(f"[select] Processing cost concept '{concept}' with shape {cost_tensor.shape}")
-            if cost_tensor.dim() == 3:
-                # Expected shape: (B, N, n_future)
-                selected_costs[concept] = cost_tensor[batch_indices, selected_indices, :]  # shape: (B, n_future)
-                #print(f"[select] Selected cost shape for '{concept}': {selected_costs[concept].shape}")
-            elif cost_tensor.dim() == 2:
-                # Expected shape: (B, N)
-                selected_costs[concept] = cost_tensor[batch_indices, selected_indices]  # shape: (B,)
-                #print(f"[select] Selected cost shape for '{concept}': {selected_costs[concept].shape}")
+            if cost_tensor.dim() == 3:  # (B, N, n_future)
+                selected_costs[concept] = cost_tensor[batch_indices, selected_indices, :]  # (B, n_future)
+            elif cost_tensor.dim() == 2:  # (B, N)
+                selected_costs[concept] = cost_tensor[batch_indices, selected_indices]  # (B,)
             else:
                 raise ValueError(f"Unexpected cost tensor dimension {cost_tensor.shape}")
 
-        # Aggregate costs over time dimension when applicable
+        # Extract costs for worst trajectories
+        selected_costs_worst = {}
+        for concept, cost_tensor in all_costs.items():
+            if cost_tensor.dim() == 3:
+                selected_costs_worst[concept] = cost_tensor[batch_indices, selected_indices_worst, :]
+            elif cost_tensor.dim() == 2:
+                selected_costs_worst[concept] = cost_tensor[batch_indices, selected_indices_worst]
+            else:
+                raise ValueError(f"Unexpected cost tensor dimension {cost_tensor.shape}")
+
+        # Aggregate costs over time dimension for best trajectories
         aggregated_costs = {}
-
-        # Alternative safety cost aggregation for debugging
         safetycost_timeseries = safetycost[batch_indices, selected_indices, :]
-        safetycost_scalar = safetycost_timeseries.max(dim=1).values
+        safetycost_scalar = safetycost_timeseries.sum(dim=1)
         aggregated_costs["safetycost_alternative"] = safetycost_scalar
-
         for concept, cost_val in selected_costs.items():
             if cost_val.dim() == 2:  # (B, n_future)
-                aggregated_costs[concept] = cost_val.max(dim=1).values  # Extract values explicitly
+                aggregated_costs[concept] = cost_val.sum(dim=1)
             else:
-                aggregated_costs[concept] = cost_val  # Already scalar
+                aggregated_costs[concept] = cost_val
 
-        # Debug print aggregated costs
-        #for concept, val in aggregated_costs.items():
-            #print(f"[select] Aggregated cost '{concept}': {val}")
+        # Aggregate costs over time dimension for worst trajectories
+        aggregated_costs_worst = {}
+        safetycost_timeseries_worst = safetycost[batch_indices, selected_indices_worst, :]
+        safetycost_scalar_worst = safetycost_timeseries_worst.sum(dim=1)
+        aggregated_costs_worst["safetycost_alternative"] = safetycost_scalar_worst
+        for concept, cost_val in selected_costs_worst.items():
+            if cost_val.dim() == 2:
+                aggregated_costs_worst[concept] = cost_val.sum(dim=1)
+            else:
+                aggregated_costs_worst[concept] = cost_val
 
-        return select_traj, aggregated_costs
+
+        # Normalized aggregated_costs
+        # Min/Max Scaling with all the trajectories
+
+        epsilon = 1e-8  # small constant to avoid division by zero
+        normalized_aggregated_costs = {}
+        normalized_aggregated_costs_worst ={}
+
+        for concept, cost_tensor in all_costs.items():
+            # Aggregate over time if needed for all trajectories
+            if cost_tensor.dim() == 3:  # (B, N, n_future)
+                aggregated_all = cost_tensor.sum(dim=2)  # (B, N)
+            elif cost_tensor.dim() == 2:  # (B, N)
+                aggregated_all = cost_tensor  # already aggregated
+            else:
+                raise ValueError(f"Unexpected cost tensor dimension {cost_tensor.shape}")
+
+            # Compute min and max per batch over trajectories
+            min_vals, _ = aggregated_all.min(dim=1, keepdim=True)  # (B, 1)
+            max_vals, _ = aggregated_all.max(dim=1, keepdim=True)  # (B, 1)
+
+            # Get aggregated cost of selected best trajectory (shape (B,))
+            best_vals = aggregated_costs[concept].unsqueeze(1)  # (B, 1)
+
+            worst_vals = aggregated_costs_worst[concept].unsqueeze(1)  # (B, 1)
+
+
+            
+            # Normalize: (best - min) / (max - min + eps)
+            norm_vals = (best_vals - min_vals) / (max_vals - min_vals + epsilon)
+            norm_vals_worst = (worst_vals- min_vals) / (max_vals - min_vals + epsilon)
+
+            print("NORMVALS", norm_vals)
+
+            # Squeeze back to (B,)
+            normalized_aggregated_costs[concept] = norm_vals.squeeze(1)
+            normalized_aggregated_costs_worst[concept] = norm_vals_worst.squeeze(1)
+
+
+            print("NAC",normalized_aggregated_costs)
+
+        # Return normalized aggregated costs along with others
+        return select_traj, aggregated_costs, aggregated_costs_worst, normalized_aggregated_costs, normalized_aggregated_costs_worst
+
+
+
+        
+
 
 
 
@@ -181,7 +239,7 @@ class Planning(nn.Module):
 
         cam_front = self.reduce_channel(cam_front)
         h0 = cam_front.flatten(start_dim=1) # (B, 256/128)
-        final_traj, aggregated_costs = self.select(cur_trajs, cost_volume, semantic_pred, lane_divider, drivable_area, target_points) # (B, n_future, 3)
+        final_traj, aggregated_costs, aggregated_costs_worst, norm_best, norm_worst = self.select(cur_trajs, cost_volume, semantic_pred, lane_divider, drivable_area, target_points) # (B, n_future, 3)
         target_points = target_points.to(dtype=h0.dtype)
         b, s, _ = final_traj.shape
         x = torch.zeros((b, 2), device=h0.device)
@@ -200,4 +258,4 @@ class Planning(nn.Module):
         if self.training:
             loss = loss*0.5 + (F.smooth_l1_loss(output_traj[:,:,:2], gt_trajs[:,:,:2], reduction='none')*torch.tensor([10., 1.], device=loss.device)).mean()
 
-        return loss, output_traj, aggregated_costs
+        return loss, output_traj, aggregated_costs, aggregated_costs_worst, norm_best, norm_worst

@@ -84,6 +84,8 @@ class Cost_Function(nn.Module):
             "lrdivider": lrdividercost,
             "rule": rulecost,
             "costvolume": costvolume,
+            "comfort": comfortcost,
+            "progress": progresscost
         }
 
         return cost_fc, cost_fo, all_costs, safetycost
