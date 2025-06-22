@@ -123,7 +123,7 @@ def eval(checkpoint_path, dataroot):
 
         if cfg.PLANNING.ENABLED:
             occupancy = torch.logical_or(seg_prediction, pedestrian_prediction)
-            _, final_traj = model.planning(
+            _, final_traj, aggregated_costs = model.planning(
                 cam_front=output['cam_front'].detach(),
                 trajs=trajs[:, :, 1:],
                 gt_trajs=labels['gt_trajectory'][:, 1:],
@@ -139,8 +139,8 @@ def eval(checkpoint_path, dataroot):
                 cur_time = (i+1)*2
                 metric_planning_val[i](final_traj[:,:cur_time].detach(), labels['gt_trajectory'][:,1:cur_time+1], occupancy[:,:cur_time])
 
-        if index % 5 == 0:
-            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj)
+        if index % 10 == 0:
+            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj, aggregated_costs=aggregated_costs)
 
 
     results = {}
@@ -171,7 +171,7 @@ def eval(checkpoint_path, dataroot):
     for key, value in results.items():
         print(f'{key} : {value.item()}')
 
-def save(output, labels, batch, n_present, frame, save_path, planned_traj=None):
+def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, aggregated_costs=None):
     hdmap = output['hdmap'].detach()
     segmentation = output['segmentation'][:, n_present - 1].detach()
     pedestrian = output['pedestrian'][:, n_present - 1].detach()
@@ -277,10 +277,30 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None):
         planned[:, 0] = -planned[:, 0]
         planned = (planned[:, :2] - bx) / dx
         plt.plot(planned[:, 0], planned[:, 1], linewidth=2.0, color='red', label='Planned Trajectory')
+    
+        
+
 
     plt.legend()
 
     plt.savefig(save_path / ('%04d.png' % frame))
+
+    # Save aggregated costs to a text file with the same base name
+    if aggregated_costs is not None:
+        txt_path = save_path / ('%04d.txt' % frame)
+        with open(txt_path, 'w') as f:
+            f.write(f"Planned Trajectory costs: \n")
+
+            for concept, val in aggregated_costs.items():
+                try:
+                    cost_val = val[0].item()  # assuming batch size 1
+                except Exception:
+                    cost_val = float(val)
+                f.write(f"{concept}: {cost_val:.4f}\n")
+
+            f.write(f"####################\n")
+                
+
     plt.close()
 
 if __name__ == '__main__':

@@ -34,13 +34,16 @@ class Cost_Function(nn.Module):
     def forward(self, cost_volume, trajs, semantic_pred, lane_divider, drivable_area, target_point):
         '''
         cost_volume: torch.Tensor<float> (B, n_future, 200, 200)
-        trajs: torch.Tensor<float> (B, N, n_future, 2)   N: sample number
+        trajs: torch.Tensor<float> (B, N, n_future, 2)
         semantic_pred: torch.Tensor<float> (B, n_future, 200, 200)
         drivable_area: torch.Tensor<float> (B, 1/2, 200, 200)
         lane_divider: torch.Tensor<float> (B, 1/2, 200, 200)
         target_points: torch.Tensor<float> (B, 2)
         '''
-        trajs = trajs * torch.tensor([-1, 1], device=trajs.device)
+        device = trajs.device
+        trajs = trajs * torch.tensor([-1, 1], device=device)
+
+        # Compute individual costs
         safetycost = torch.clamp(self.safetycost(trajs, semantic_pred), 0, 100)
         headwaycost = torch.clamp(self.headwaycost(trajs, semantic_pred, drivable_area), 0, 100)
         lrdividercost = torch.clamp(self.lrdividercost(trajs, lane_divider), 0, 100)
@@ -49,17 +52,42 @@ class Cost_Function(nn.Module):
         rulecost = torch.clamp(self.rulecost(trajs, drivable_area), 0, 100)
         costvolume = torch.clamp(self.costvolume(trajs, cost_volume), 0, 100)
 
-        cost_fo = (
-            concept_mask["obstacle"]    * safetycost +
-            concept_mask["drivable_area"] * headwaycost +
-            concept_mask["lane_divider"]  * lrdividercost +
-            concept_mask["cost_volume"]   * costvolume +
-            concept_mask["rule"]          * rulecost
-        )
-        cost_fc = comfortcost + progresscost
+        # Debug prints for cost stats
+        # print(f"[forward] safetycost min/max/mean: {safetycost.min().item():.4f}/{safetycost.max().item():.4f}/{safetycost.mean().item():.4f}")
+        # print(f"[forward] headwaycost min/max/mean: {headwaycost.min().item():.4f}/{headwaycost.max().item():.4f}/{headwaycost.mean().item():.4f}")
+        # print(f"[forward] lrdividercost min/max/mean: {lrdividercost.min().item():.4f}/{lrdividercost.max().item():.4f}/{lrdividercost.mean().item():.4f}")
+        # print(f"[forward] comfortcost min/max/mean: {comfortcost.min().item():.4f}/{comfortcost.max().item():.4f}/{comfortcost.mean().item():.4f}")
+        # print(f"[forward] progresscost min/max/mean: {progresscost.min().item():.4f}/{progresscost.max().item():.4f}/{progresscost.mean().item():.4f}")
+        # print(f"[forward] rulecost min/max/mean: {rulecost.min().item():.4f}/{rulecost.max().item():.4f}/{rulecost.mean().item():.4f}")
+        # print(f"[forward] costvolume min/max/mean: {costvolume.min().item():.4f}/{costvolume.max().item():.4f}/{costvolume.mean().item():.4f}")
+
         
 
-        return cost_fc, cost_fo
+        # Compute combined costs
+        cost_fo = (
+            concept_mask.get("obstacle", 1.0)    * safetycost +
+            concept_mask.get("drivable_area", 1.0) * headwaycost +
+            concept_mask.get("lane_divider", 1.0)  * lrdividercost +
+            concept_mask.get("cost_volume", 1.0)   * costvolume +
+            concept_mask.get("rule", 1.0)          * rulecost
+        )
+        cost_fc = comfortcost + progresscost
+
+        # Debug combined costs
+        # print(f"[forward] cost_fo min/max/mean: {cost_fo.min().item():.4f}/{cost_fo.max().item():.4f}/{cost_fo.mean().item():.4f}")
+        # print(f"[forward] cost_fc min/max/mean: {cost_fc.min().item():.4f}/{cost_fc.max().item():.4f}/{cost_fc.mean().item():.4f}")
+
+        # Collect all costs for explainability
+        all_costs = {
+            "safety": safetycost,
+            "headway": headwaycost,
+            "lrdivider": lrdividercost,
+            "rule": rulecost,
+            "costvolume": costvolume,
+        }
+
+        return cost_fc, cost_fo, all_costs, safetycost
+
 
 
 

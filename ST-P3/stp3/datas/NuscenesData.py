@@ -434,7 +434,34 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
         tt = np.arange(t_start, t_end + t_interval, t_interval)
         sampled_trajectories_fine = trajectory_sampler.sample(v0, Kappa, T0, N0, tt, self.n_samples)
         sampled_trajectories = sampled_trajectories_fine[:, ::10]
-        return sampled_trajectories
+
+        def get_current_direction_trajectory(v0, Kappa, T0, N0, tt):
+          # This generates a single trajectory for the current speed/curvature
+          # Use your deterministic circle/straight logic here
+          if abs(Kappa) < 1e-6:
+              # Straight line
+              points = v0 * tt[:, None] * T0[None, :]
+              thetas = np.zeros_like(tt)
+              traj = np.concatenate([points, thetas[:, None]], axis=1)
+          else:
+              # Circular arc
+              radius = 1.0 / Kappa
+              center = np.array([-1.0 / Kappa, 0])
+              phis = v0 * tt / radius
+              points = np.stack([
+                  center[0] + radius * np.cos(phis),
+                  center[1] + radius * np.sin(phis)
+              ], axis=1)
+              thetas = phis
+              traj = np.concatenate([points, thetas[:, None]], axis=1)
+          return traj
+
+        current_direction_traj = get_current_direction_trajectory(
+            v0, Kappa, T0, N0, tt
+        )[::10]  # downsample if needed
+
+        print("Current_trajectory:", current_direction_traj)
+        return sampled_trajectories, current_direction_traj
 
     def voxelize_hd_map(self, rec):
         dx, bx, _ = gen_dx_bx(self.cfg.LIFT.X_BOUND, self.cfg.LIFT.Y_BOUND, self.cfg.LIFT.Z_BOUND)
@@ -626,8 +653,9 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
                 gt_trajectory, command = self.get_gt_trajectory(rec, index_t)
                 data['gt_trajectory'] = torch.from_numpy(gt_trajectory).float()
                 data['command'] = command
-                trajs = self.get_trajectory_sampling(rec)
+                trajs, current_direction_traj = self.get_trajectory_sampling(rec)
                 data['sample_trajectory'] = torch.from_numpy(trajs).float()
+                data['current_direction_trajectory'] = torch.from_numpy(current_direction_traj).float()
 
         for key, value in data.items():
             if key in ['image', 'intrinsics', 'extrinsics', 'depths', 'segmentation', 'instance', 'future_egomotion', 'hdmap', 'pedestrian']:
