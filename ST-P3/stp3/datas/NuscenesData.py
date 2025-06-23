@@ -460,7 +460,13 @@ class FuturePredictionDataset(torch.utils.data.Dataset):
             v0, Kappa, T0, N0, tt
         )[::10]  # downsample if needed
 
-        print("Current_trajectory:", current_direction_traj)
+
+        # Match shape with sampled_trajectories: (N, T, 3)
+        current_direction_traj = current_direction_traj[None, ...]  # (1, 7, 3)
+        current_direction_traj = np.repeat(current_direction_traj, self.n_samples, axis=0)  # (N, 7, 3)
+
+        print("Current_trajectory:", current_direction_traj.shape)
+        print("sampled_trajectories:", sampled_trajectories.shape)
         return sampled_trajectories, current_direction_traj
 
     def voxelize_hd_map(self, rec):

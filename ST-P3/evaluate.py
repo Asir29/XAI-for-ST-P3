@@ -84,6 +84,13 @@ def eval(checkpoint_path, dataroot):
         future_egomotion = batch['future_egomotion']
         command = batch['command']
         trajs = batch['sample_trajectory']
+        
+        
+        ######
+        curr_traj = batch['current_direction_trajectory']
+        
+        
+        
         target_points = batch['target_point']
         B = len(image)
         labels = trainer.prepare_future_labels(batch)
@@ -133,14 +140,32 @@ def eval(checkpoint_path, dataroot):
                 commands=command,
                 target_points=target_points
             )
+
+            # Computation of costs for the current trajectory projection
+            _, _, aggregated_costs_current, _, norm_current, _ = model.planning(
+              cam_front=output['cam_front'].detach(),
+              trajs=curr_traj[:, :, 1:],
+              gt_trajs=labels['gt_trajectory'][:, 1:],
+              cost_volume=output['costvolume'][:, n_present:].detach(),
+              semantic_pred=occupancy[:, n_present:].squeeze(2),
+              hd_map=output['hdmap'].detach(),
+              commands=command,
+              target_points=target_points,
+              all_traj=trajs[:, :, 1:]
+            )
+
             occupancy = torch.logical_or(labels['segmentation'][:, n_present:].squeeze(2),
                                          labels['pedestrian'][:, n_present:].squeeze(2))
             for i in range(future_second):
                 cur_time = (i+1)*2
                 metric_planning_val[i](final_traj[:,:cur_time].detach(), labels['gt_trajectory'][:,1:cur_time+1], occupancy[:,:cur_time])
+            
+           
+
+
 
         if index % 10 == 0:
-            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj, aggregated_costs=aggregated_costs, aggregated_costs_worst=aggregated_costs_worst, norm_best=norm_best, norm_worst=norm_worst)
+            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj, aggregated_costs=aggregated_costs, aggregated_costs_worst=aggregated_costs_worst, norm_best=norm_best, norm_worst=norm_worst, aggregated_costs_current=aggregated_costs_current, norm_current=norm_current)
 
 
     results = {}
@@ -171,7 +196,7 @@ def eval(checkpoint_path, dataroot):
     for key, value in results.items():
         print(f'{key} : {value.item()}')
 
-def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, aggregated_costs=None, aggregated_costs_worst=None, norm_best=None, norm_worst=None):
+def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, aggregated_costs=None, aggregated_costs_worst=None, norm_best=None, norm_worst=None, aggregated_costs_current=None, norm_current=None):
     hdmap = output['hdmap'].detach()
     segmentation = output['segmentation'][:, n_present - 1].detach()
     pedestrian = output['pedestrian'][:, n_present - 1].detach()
@@ -298,7 +323,7 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
                     cost_val = float(val)
                 f.write(f"{concept}: {cost_val:.4f}\n")
 
-            f.write(f"####################\n")
+            f.write(f"####################\n\n")
 
             f.write(f"Worst Planned Trajectory costs: \n\n")
 
@@ -310,7 +335,7 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
                     cost_val = float(val)
               f.write(f"{concept}: {cost_val:.4f}\n")
 
-            f.write(f"####################\n")
+            f.write(f"####################\n\n")
 
             f.write(f"NORMALIZED Planned Trajectory costs: \n\n")
 
@@ -321,7 +346,7 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
                     cost_val = float(val)
               f.write(f"{concept}: {cost_val:.4f}\n")
 
-            f.write(f"####################\n")
+            f.write(f"####################\n\n")
 
             f.write(f"NORMALIZED Worst Planned Trajectory costs: \n\n")
 
@@ -333,7 +358,31 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
                     cost_val = float(val)
               f.write(f"{concept}: {cost_val:.4f}\n")
 
-            f.write(f"####################\n")
+            f.write(f"####################\n\n")
+
+            f.write(f"Current direction Trajectory costs: \n\n")
+
+
+            for concept, val in aggregated_costs_current.items():
+              try:
+                    cost_val = val[0].item()  # assuming batch size 1
+              except Exception:
+                    cost_val = float(val)
+              f.write(f"{concept}: {cost_val:.4f}\n")
+
+            f.write(f"####################\n\n")
+
+            f.write(f"NORMALIZED Current direction Trajectory costs: \n\n")
+
+            for concept, val in norm_current.items():
+              try:
+                    cost_val = val[0].item()  # assuming batch size 1
+              except Exception:
+                    cost_val = float(val)
+              f.write(f"{concept}: {cost_val:.4f}\n")
+
+            f.write(f"####################\n\n")
+
 
 
 

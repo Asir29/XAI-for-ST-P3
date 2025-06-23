@@ -44,7 +44,7 @@ class Planning(nn.Module):
 
         raise ValueError('trajs ndim != gt_traj ndim')
 
-    def select(self, trajs, cost_volume, semantic_pred, lane_divider, drivable_area, target_points, k=1):
+    def select(self, trajs, cost_volume, semantic_pred, lane_divider, drivable_area, target_points, k=1, all_traj=None): # all_traj to normalize the current direction trajectories
         '''
         trajs: torch.Tensor (B, N, n_future, 3)
         cost_volume: torch.Tensor (B, n_future, 200, 200)
@@ -103,7 +103,6 @@ class Planning(nn.Module):
         aggregated_costs = {}
         safetycost_timeseries = safetycost[batch_indices, selected_indices, :]
         safetycost_scalar = safetycost_timeseries.sum(dim=1)
-        aggregated_costs["safetycost_alternative"] = safetycost_scalar
         for concept, cost_val in selected_costs.items():
             if cost_val.dim() == 2:  # (B, n_future)
                 aggregated_costs[concept] = cost_val.sum(dim=1)
@@ -114,7 +113,6 @@ class Planning(nn.Module):
         aggregated_costs_worst = {}
         safetycost_timeseries_worst = safetycost[batch_indices, selected_indices_worst, :]
         safetycost_scalar_worst = safetycost_timeseries_worst.sum(dim=1)
-        aggregated_costs_worst["safetycost_alternative"] = safetycost_scalar_worst
         for concept, cost_val in selected_costs_worst.items():
             if cost_val.dim() == 2:
                 aggregated_costs_worst[concept] = cost_val.sum(dim=1)
@@ -128,6 +126,12 @@ class Planning(nn.Module):
         epsilon = 1e-8  # small constant to avoid division by zero
         normalized_aggregated_costs = {}
         normalized_aggregated_costs_worst ={}
+
+        if all_traj is not None: # Case in which we want to normalize the current direction costs related to all the sampled trajectories
+          # Compute costs
+          sm_cost_fc, sm_cost_fo, all_costs, safetycost = self.cost_function(
+          cost_volume, all_traj[:, :, :, :2], semantic_pred, lane_divider, drivable_area, target_points
+        )
 
         for concept, cost_tensor in all_costs.items():
             # Aggregate over time if needed for all trajectories
@@ -153,14 +157,19 @@ class Planning(nn.Module):
             norm_vals = (best_vals - min_vals) / (max_vals - min_vals + epsilon)
             norm_vals_worst = (worst_vals- min_vals) / (max_vals - min_vals + epsilon)
 
-            print("NORMVALS", norm_vals)
+            #print("NORMVALS", norm_vals)
 
             # Squeeze back to (B,)
             normalized_aggregated_costs[concept] = norm_vals.squeeze(1)
             normalized_aggregated_costs_worst[concept] = norm_vals_worst.squeeze(1)
 
 
-            print("NAC",normalized_aggregated_costs)
+            #print("NAC",normalized_aggregated_costs)
+
+
+            
+
+
 
         # Return normalized aggregated costs along with others
         return select_traj, aggregated_costs, aggregated_costs_worst, normalized_aggregated_costs, normalized_aggregated_costs_worst
@@ -197,7 +206,7 @@ class Planning(nn.Module):
 
         return torch.mean(L)
 
-    def forward(self,cam_front, trajs, gt_trajs, cost_volume, semantic_pred, hd_map, commands, target_points):
+    def forward(self,cam_front, trajs, gt_trajs, cost_volume, semantic_pred, hd_map, commands, target_points, all_traj=None):
         '''
         cam_front: torch.Tensor (B, 64, 60, 28)
         trajs: torch.Tensor (B, N, n_future, 3)
@@ -239,7 +248,7 @@ class Planning(nn.Module):
 
         cam_front = self.reduce_channel(cam_front)
         h0 = cam_front.flatten(start_dim=1) # (B, 256/128)
-        final_traj, aggregated_costs, aggregated_costs_worst, norm_best, norm_worst = self.select(cur_trajs, cost_volume, semantic_pred, lane_divider, drivable_area, target_points) # (B, n_future, 3)
+        final_traj, aggregated_costs, aggregated_costs_worst, norm_best, norm_worst = self.select(cur_trajs, cost_volume, semantic_pred, lane_divider, drivable_area, target_points, k=1, all_traj=all_traj) # (B, n_future, 3)
         target_points = target_points.to(dtype=h0.dtype)
         b, s, _ = final_traj.shape
         x = torch.zeros((b, 2), device=h0.device)
