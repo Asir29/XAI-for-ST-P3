@@ -10,6 +10,7 @@ import matplotlib
 from matplotlib import pyplot as plt
 import pathlib
 import datetime
+import copy
 
 from stp3.datas.NuscenesData import FuturePredictionDataset
 from stp3.trainer import TrainingModule
@@ -99,6 +100,21 @@ def eval(checkpoint_path, dataroot):
             output = model(
                 image, intrinsics, extrinsics, future_egomotion
             )
+        #['image', 'intrinsics', 'extrinsics', 'depths', 'segmentation', 'instance', 'centerness', 'offset', 'flow', 'pedestrian', 'future_egomotion', 'hdmap', 'gt_trajectory', 'indices', 'command', 'sample_trajectory', 'current_direction_trajectory', 'target_point']
+        # --- Calcolo CaCE per il concetto 'pedestrian' ---
+        # Crea una copia del batch con l'intervento
+        intervened_batch = copy.deepcopy(batch)
+        intervened_image = intervened_batch['image']
+        intervened_intrinsics = intervened_batch['intrinsics']
+        intervened_extrinsics = intervened_batch['extrinsics']
+        intervened_future_egomotion = intervened_batch['future_egomotion']
+
+        with torch.no_grad():
+            output_intervened = model(
+                intervened_image, intervened_intrinsics, intervened_extrinsics, intervened_future_egomotion
+            )
+
+        
 
         n_present = model.receptive_field
 
@@ -141,6 +157,24 @@ def eval(checkpoint_path, dataroot):
                 target_points=target_points
             )
 
+        if cfg.PLANNING.ENABLED:
+
+                # Traiettoria senza pedoni (intervento)
+            seg_prediction_intervened = torch.zeros_like(seg_prediction)
+            pedestrian_prediction_intervened = torch.zeros_like(pedestrian_prediction)
+
+            occupancy_intervened = torch.logical_or(seg_prediction_intervened, pedestrian_prediction_intervened)
+            _, final_traj_intervened, aggregated_costs_intervened, _, norm_cost_intervened, _ = model.planning(
+                cam_front=output_intervened['cam_front'].detach(),
+                trajs=trajs[:, :, 1:],
+                gt_trajs=labels['gt_trajectory'][:, 1:],
+                cost_volume=output_intervened['costvolume'][:, n_present:].detach(),
+                semantic_pred=occupancy_intervened[:, n_present:].squeeze(2),
+                hd_map=output_intervened['hdmap'].detach(),
+                commands=command,
+                target_points=target_points
+            )
+
             # Computation of costs for the current trajectory projection
             _, _, aggregated_costs_current, _, norm_current, _ = model.planning(
               cam_front=output['cam_front'].detach(),
@@ -161,11 +195,15 @@ def eval(checkpoint_path, dataroot):
                 metric_planning_val[i](final_traj[:,:cur_time].detach(), labels['gt_trajectory'][:,1:cur_time+1], occupancy[:,:cur_time])
             
            
+        n_present = model.receptive_field
+
+        # Calcola la differenza media assoluta tra le traiettorie (CaCE)
+        cace_effect = (final_traj_intervened - final_traj).abs().mean().item()
 
 
 
         if index % 10 == 0:
-            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj, aggregated_costs=aggregated_costs, aggregated_costs_worst=aggregated_costs_worst, norm_best=norm_best, norm_worst=norm_worst, aggregated_costs_current=aggregated_costs_current, norm_current=norm_current)
+            save(output, labels, batch, n_present, index, save_path, planned_traj=final_traj, aggregated_costs=aggregated_costs, aggregated_costs_worst=aggregated_costs_worst, norm_best=norm_best, norm_worst=norm_worst, aggregated_costs_current=aggregated_costs_current, norm_current=norm_current,aggregated_costs_intervened=aggregated_costs_intervened, final_traj_intervened=final_traj_intervened, norm_cost_intervened= norm_cost_intervened,cace_effect=cace_effect)
 
 
     results = {}
@@ -196,13 +234,19 @@ def eval(checkpoint_path, dataroot):
     for key, value in results.items():
         print(f'{key} : {value.item()}')
 
-def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, aggregated_costs=None, aggregated_costs_worst=None, norm_best=None, norm_worst=None, aggregated_costs_current=None, norm_current=None):
-    hdmap = output['hdmap'].detach()
-    segmentation = output['segmentation'][:, n_present - 1].detach()
-    pedestrian = output['pedestrian'][:, n_present - 1].detach()
-    gt_trajs = labels['gt_trajectory']
-    images = batch['image']
+def save(output, labels, batch, n_present, frame, save_path,
+         planned_traj=None, aggregated_costs=None, aggregated_costs_worst=None,
+         norm_best=None, norm_worst=None, aggregated_costs_current=None,
+         norm_current=None, aggregated_costs_intervened=None, final_traj_intervened=None,norm_cost_intervened=None,cace_effect=None):
 
+    import torchvision
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    # Funzione per invertire normalizzazione immagine
     denormalise_img = torchvision.transforms.Compose(
         (NormalizeInverse(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
          torchvision.transforms.ToPILImage(),)
@@ -210,26 +254,37 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
 
     val_w = 2.99
     val_h = 2.99 * (224. / 480.)
-    plt.figure(1, figsize=(4*val_w,2*val_h))
-    width_ratios = (val_w,val_w,val_w,val_w)
-    gs = matplotlib.gridspec.GridSpec(2, 4, width_ratios=width_ratios)
+    plt.figure(1, figsize=(5*val_w, 2*val_h))  # spazio più largo per 2 subplot traiettorie
+    width_ratios = (val_w, val_w, val_w, val_w, val_w)
+    gs = matplotlib.gridspec.GridSpec(2, 5, width_ratios=width_ratios)
     gs.update(wspace=0.0, hspace=0.0, left=0.0, right=1.0, top=1.0, bottom=0.0)
 
+    images = batch['image']
+    hdmap = output['hdmap'].detach()
+    segmentation = output['segmentation'][:, n_present - 1].detach()
+    pedestrian = output['pedestrian'][:, n_present - 1].detach()
+    gt_trajs = labels['gt_trajectory']
+
+    # --- Subplot immagini (come nel tuo codice originale) ---
+    # FRONT LEFT
     plt.subplot(gs[0, 0])
     plt.annotate('FRONT LEFT', (0.01, 0.87), c='white', xycoords='axes fraction', fontsize=14)
     plt.imshow(denormalise_img(images[0,n_present-1,0].cpu()))
     plt.axis('off')
 
+    # FRONT
     plt.subplot(gs[0, 1])
     plt.annotate('FRONT', (0.01, 0.87), c='white', xycoords='axes fraction', fontsize=14)
     plt.imshow(denormalise_img(images[0,n_present-1,1].cpu()))
     plt.axis('off')
 
+    # FRONT RIGHT
     plt.subplot(gs[0, 2])
     plt.annotate('FRONT RIGHT', (0.01, 0.87), c='white', xycoords='axes fraction', fontsize=14)
     plt.imshow(denormalise_img(images[0,n_present-1,2].cpu()))
     plt.axis('off')
 
+    # BACK LEFT
     plt.subplot(gs[1, 0])
     plt.annotate('BACK LEFT', (0.01, 0.87), c='white', xycoords='axes fraction', fontsize=14)
     showing = denormalise_img(images[0,n_present-1,3].cpu())
@@ -237,6 +292,7 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
     plt.imshow(showing)
     plt.axis('off')
 
+    # BACK
     plt.subplot(gs[1, 1])
     plt.annotate('BACK', (0.01, 0.87), c='white', xycoords='axes fraction', fontsize=14)
     showing = denormalise_img(images[0, n_present - 1, 4].cpu())
@@ -244,6 +300,7 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
     plt.imshow(showing)
     plt.axis('off')
 
+    # BACK RIGHT
     plt.subplot(gs[1, 2])
     plt.annotate('BACK', (0.01, 0.87), c='white', xycoords='axes fraction', fontsize=14)
     showing = denormalise_img(images[0, n_present - 1, 5].cpu())
@@ -251,6 +308,8 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
     plt.imshow(showing)
     plt.axis('off')
 
+
+       # --- Subplot mappa hdmap e segmentazione (gs[:,3]) ---
     plt.subplot(gs[:, 3])
     showing = torch.zeros((200, 200, 3)).numpy()
     showing[:, :] = np.array([219 / 255, 215 / 255, 215 / 255])
@@ -277,6 +336,7 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
     plt.imshow(make_contour(showing))
     plt.axis('off')
 
+    # --- Prepara coordinate e dimensioni veicolo ---
     bx = np.array([-50.0 + 0.5/2.0, -50.0 + 0.5/2.0])
     dx = np.array([0.5, 0.5])
     w, h = 1.85, 4.084
@@ -288,107 +348,160 @@ def save(output, labels, batch, n_present, frame, save_path, planned_traj=None, 
     ])
     pts = (pts - bx) / dx
     pts[:, [0, 1]] = pts[:, [1, 0]]
-    plt.fill(pts[:, 0], pts[:, 1], '#76b900')
 
-    plt.xlim((200, 0))
-    plt.ylim((0, 200))
+    # --- Plot Ground Truth e traiettoria originale (gs[:,4]) ---
+    ax_traj_orig = plt.subplot(gs[:, 4])
+    ax_traj_orig.imshow(make_contour(showing))
+    ax_traj_orig.axis('off')
+    ax_traj_orig.fill(pts[:, 0], pts[:, 1], '#76b900')
+    ax_traj_orig.set_xlim((200, 0))
+    ax_traj_orig.set_ylim((0, 200))
+
+    gt_trajs = labels['gt_trajectory'].cpu().numpy()
     gt_trajs[0, :, :1] = gt_trajs[0, :, :1] * -1
-    gt_trajs = (gt_trajs[0, :, :2].cpu().numpy() - bx) / dx
-    plt.plot(gt_trajs[:, 0], gt_trajs[:, 1], linewidth=3.0, label='Ground Truth')
+    gt_trajs = (gt_trajs[0, :, :2] - bx) / dx
+    ax_traj_orig.plot(gt_trajs[:, 0], gt_trajs[:, 1], linewidth=3.0, label='Ground Truth')
 
-    # Process planned trajectory the same way
     if planned_traj is not None:
         planned = planned_traj[0].detach().cpu().numpy()
         planned[:, 0] = -planned[:, 0]
         planned = (planned[:, :2] - bx) / dx
-        plt.plot(planned[:, 0], planned[:, 1], linewidth=2.0, color='red', label='Planned Trajectory')
-    
-        
+        ax_traj_orig.plot(planned[:, 0], planned[:, 1], linewidth=2.0, color='red', label='Planned Trajectory')
 
+    ax_traj_orig.legend()
+    ax_traj_orig.set_title('Original Trajectory')
 
-    plt.legend()
+    # --- Plot traiettoria dopo intervento (CaCE) (gs[:,5]) ---
+    if final_traj_intervened is not None:
+        # Se gs ha solo 5 colonne, usa un nuovo figure per evitare problemi
+        fig2 = plt.figure(2, figsize=(val_w*2, val_h*2))
+        ax_traj_interv = fig2.add_subplot(1,1,1)
+        ax_traj_interv.imshow(make_contour(showing))
+        ax_traj_interv.axis('off')
+        ax_traj_interv.fill(pts[:, 0], pts[:, 1], '#76b900')
+        ax_traj_interv.set_xlim((200, 0))
+        ax_traj_interv.set_ylim((0, 200))
+
+        final_interv = final_traj_intervened[0].detach().cpu().numpy()
+        final_interv[:, 0] = -final_interv[:, 0]
+        final_interv = (final_interv[:, :2] - bx) / dx
+
+        if planned_traj is not None:
+          planned = planned_traj[0].detach().cpu().numpy()
+          planned[:, 0] = -planned[:, 0]
+          planned = (planned[:, :2] - bx) / dx
+          ax_traj_interv.plot(planned[:, 0], planned[:, 1], linewidth=2.0, color='red', label='Planned Trajectory')
+
+        ax_traj_interv.plot(final_interv[:, 0], final_interv[:, 1], linewidth=2.0, color='blue', label='Intervened Trajectory')
+
+        ax_traj_interv.legend()
+        ax_traj_interv.set_title('Trajectory after Intervention')
+        fig2.savefig(save_path / ('%04d_intervened.png' % frame))
+        plt.close(fig2)
 
     plt.savefig(save_path / ('%04d.png' % frame))
+    plt.close()
 
-    # Save aggregated costs to a text file with the same base name
+    # --- Funzione per etichettare i costi ---
+    def label_cost(val):
+        if val < 0.3:
+            return "low"
+        elif val < 0.7:
+            return "medium"
+        else:
+            return "high"
+
+    # --- Salvataggio costi con label ---
     if aggregated_costs is not None:
         txt_path = save_path / ('%04d.txt' % frame)
         with open(txt_path, 'w') as f:
             f.write(f"Planned Trajectory costs: \n\n")
-
             for concept, val in aggregated_costs.items():
                 try:
-                    cost_val = val[0].item()  # assuming batch size 1
+                    cost_val = val[0].item()
                 except Exception:
                     cost_val = float(val)
-                f.write(f"{concept}: {cost_val:.4f}\n")
+                f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
             f.write(f"####################\n\n")
 
             f.write(f"Worst Planned Trajectory costs: \n\n")
-
-
             for concept, val in aggregated_costs_worst.items():
-              try:
-                    cost_val = val[0].item()  # assuming batch size 1
-              except Exception:
+                try:
+                    cost_val = val[0].item()
+                except Exception:
                     cost_val = float(val)
-              f.write(f"{concept}: {cost_val:.4f}\n")
+                f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
             f.write(f"####################\n\n")
 
             f.write(f"NORMALIZED Planned Trajectory costs: \n\n")
-
             for concept, val in norm_best.items():
-              try:
-                    cost_val = val[0].item()  # assuming batch size 1
-              except Exception:
+                try:
+                    cost_val = val[0].item()
+                except Exception:
                     cost_val = float(val)
-              f.write(f"{concept}: {cost_val:.4f}\n")
+                f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
             f.write(f"####################\n\n")
 
             f.write(f"NORMALIZED Worst Planned Trajectory costs: \n\n")
-
-
             for concept, val in norm_worst.items():
-              try:
-                    cost_val = val[0].item()  # assuming batch size 1
-              except Exception:
+                try:
+                    cost_val = val[0].item()
+                except Exception:
                     cost_val = float(val)
-              f.write(f"{concept}: {cost_val:.4f}\n")
+                f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
             f.write(f"####################\n\n")
 
             f.write(f"Current direction Trajectory costs: \n\n")
-
-
             for concept, val in aggregated_costs_current.items():
-              try:
-                    cost_val = val[0].item()  # assuming batch size 1
-              except Exception:
+                try:
+                    cost_val = val[0].item()
+                except Exception:
                     cost_val = float(val)
-              f.write(f"{concept}: {cost_val:.4f}\n")
+                f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
             f.write(f"####################\n\n")
 
             f.write(f"NORMALIZED Current direction Trajectory costs: \n\n")
-
             for concept, val in norm_current.items():
-              try:
-                    cost_val = val[0].item()  # assuming batch size 1
-              except Exception:
+                try:
+                    cost_val = val[0].item()
+                except Exception:
                     cost_val = float(val)
-              f.write(f"{concept}: {cost_val:.4f}\n")
+                f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
             f.write(f"####################\n\n")
 
+            # Costi dopo intervento (CaCE)
+            if aggregated_costs_intervened is not None:
+                f.write(f"Costs after Intervention (CaCE): \n\n")
+                for concept, val in aggregated_costs_intervened.items():
+                    try:
+                        cost_val = val[0].item()
+                    except Exception:
+                        cost_val = float(val)
+                    f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
+                f.write(f"####################\n\n")
 
+            if norm_cost_intervened is not None:
+                f.write(f"NORMALIZED Costs after Intervention (CaCE): \n\n")
+                for concept, val in norm_cost_intervened.items():
+                    try:
+                        cost_val = val[0].item()
+                    except Exception:
+                        cost_val = float(val)
+                    f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
+                f.write(f"####################\n\n")
 
+            if cace_effect is not None:
+              f.write(f"Cace Effect: {cace_effect}\n\n ")
 
-            
+           
                 
 
     plt.close()
