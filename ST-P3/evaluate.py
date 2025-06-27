@@ -402,7 +402,6 @@ def save(output, labels, batch, n_present, frame, save_path,
     plt.savefig(save_path / ('%04d.png' % frame))
     plt.close()
 
-<<<<<<< HEAD
 
     def explain_trajectory_change(current, planned, thresholds=None):
         """
@@ -451,10 +450,7 @@ def save(output, labels, batch, n_present, frame, save_path,
             insights.append(f"Selected trajectory is marginally better overall.\n")
 
         return insights
-
-
-=======
->>>>>>> b64bb8624d03420ed2afa0d49e1596f354d7e918
+    
     # --- Funzione per etichettare i costi ---
     def label_cost(val):
         if val < 0.3:
@@ -463,6 +459,8 @@ def save(output, labels, batch, n_present, frame, save_path,
             return "medium"
         else:
             return "high"
+        
+    
 
     # --- Salvataggio costi con label ---
     if aggregated_costs is not None:
@@ -525,9 +523,7 @@ def save(output, labels, batch, n_present, frame, save_path,
                 except Exception:
                     cost_val = float(val)
                 f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
-<<<<<<< HEAD
 
-            
             f.write(f"####################\n\n")
 
             # Insights from current trajectory and future planned one:
@@ -569,37 +565,6 @@ def save(output, labels, batch, n_present, frame, save_path,
             if cace_effect is not None:
               f.write(f"Cace Effect: {cace_effect}\n\n ")
 
-=======
-
-            f.write(f"####################\n\n")
-
-            # Costi dopo intervento (CaCE)
-            if aggregated_costs_intervened is not None:
-                f.write(f"Costs after Intervention (CaCE): \n\n")
-                for concept, val in aggregated_costs_intervened.items():
-                    try:
-                        cost_val = val[0].item()
-                    except Exception:
-                        cost_val = float(val)
-                    f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
-
-                f.write(f"####################\n\n")
-
-            if norm_cost_intervened is not None:
-                f.write(f"NORMALIZED Costs after Intervention (CaCE): \n\n")
-                for concept, val in norm_cost_intervened.items():
-                    try:
-                        cost_val = val[0].item()
-                    except Exception:
-                        cost_val = float(val)
-                    f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
-
-                f.write(f"####################\n\n")
-
-            if cace_effect is not None:
-              f.write(f"Cace Effect: {cace_effect}\n\n ")
-
->>>>>>> b64bb8624d03420ed2afa0d49e1596f354d7e918
            
                 
 
