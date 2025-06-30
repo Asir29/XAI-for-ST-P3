@@ -402,6 +402,57 @@ def save(output, labels, batch, n_present, frame, save_path,
     plt.savefig(save_path / ('%04d.png' % frame))
     plt.close()
 
+    import subprocess
+    
+    
+
+    def explain_with_ollama(costs_current, costs_planned, model='mistral'):
+        # Helper to format cost dict with tensors on CUDA
+        def format_costs(costs):
+            return ', '.join(
+                f"{k}={v.cpu().item():.4f}"
+                for k, v in costs.items()
+            )
+
+        prompt = f"""
+        You are an expert autonomous vehicle assistant specialized in Explainable AI.
+
+        Here is important context about the cost components used to evaluate trajectories:
+
+        - The safety cost penalizes trajectories that intersect with predicted obstacles such as vehicles or pedestrians. It is sensitive to vehicle velocity, assigning higher penalties for collisions at higher speeds, relying on accurate obstacle prediction from semantic segmentation.
+
+        - The headway cost enforces safe following distances by penalizing trajectories that enter a zone approximately ten meters behind detected vehicles, ensuring proper longitudinal spacing.
+
+        - The lane divider cost discourages unsafe or illegal lane changes by penalizing trajectories close to lane boundaries, using detailed lane marking segmentation.
+
+        - The cost volume is a learned component that captures latent preferences for comfort, efficiency, and risk avoidance, based on training data rather than fixed rules.
+
+        - The rule cost enforces legal and physical constraints by penalizing trajectories that leave the predicted drivable area, preventing paths that cross sidewalks or off-road zones.
+
+        Below are the costs for two trajectories:
+
+        Current trajectory costs: {format_costs(costs_current)}
+        Planned trajectory costs: {format_costs(costs_planned)}
+
+        Please explain shortly why the planned trajectory was chosen over the current one.
+        Provide the explaination in form of a list.  
+        Discuss which costs the model weighted more heavily in making this decision.  
+        Note: For the progress cost, assume that lower values indicate better outcomes.
+         
+        """
+        # Run ollama CLI with prompt encoded as bytes
+        result = subprocess.run(
+            ["ollama", "run", model],
+            input=prompt,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode != 0:
+            print("Error:", result.stderr)
+            return None
+        return result.stdout.strip()
+
 
     def explain_trajectory_change(current, planned, thresholds=None):
         """
@@ -528,16 +579,18 @@ def save(output, labels, batch, n_present, frame, save_path,
 
             # Insights from current trajectory and future planned one:
             # translation of the numeric differences into semantically meaningful insights
-            insights = explain_trajectory_change(norm_current, norm_best)
-            
-            f.write(f"Insights from current trajectory and future planned one:\n\n")
-            for insight in insights:
-                f.write(insight) 
+            #insights = explain_trajectory_change(norm_current, norm_best)
+            print(norm_current)
+            insights = explain_with_ollama(norm_current, norm_best, 'mistral') 
+            f.write(f"Insights from LLM of current trajectory and future planned one:\n\n")
+            #for insight in insights:
+            #    f.write(insight) 
+            f.write(insights)
 
             
             
             
-            f.write(f"####################\n\n")
+            f.write(f"\n####################\n\n")
 
             # Costi dopo intervento (CaCE)
             if aggregated_costs_intervened is not None:
