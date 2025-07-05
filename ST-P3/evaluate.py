@@ -234,6 +234,19 @@ def eval(checkpoint_path, dataroot):
     for key, value in results.items():
         print(f'{key} : {value.item()}')
 
+def check_pixel_collision(trajectory, image_array, bx, dx, color_targets):
+    trajectory_np = trajectory.astype(int)
+    #print(trajectory_np)
+    for x, y in trajectory_np:
+        if 0 <= y < image_array.shape[0] and 0 <= x < image_array.shape[1]:
+            pixel = image_array[y, x]
+            #print(f"Pixel at ({x},{y}): {pixel}")
+            for target_color in color_targets:
+                if np.allclose(pixel, target_color, atol=0.1):  # tolleranza di colore
+                    return (x, y)
+    return None
+
+
 def save(output, labels, batch, n_present, frame, save_path,
          planned_traj=None, aggregated_costs=None, aggregated_costs_worst=None,
          norm_best=None, norm_worst=None, aggregated_costs_current=None,
@@ -333,8 +346,15 @@ def save(output, labels, batch, n_present, frame, save_path,
     pedestrian_index = pedestrian_seg > 0
     showing[pedestrian_index] = np.array([28 / 255, 81 / 255, 227 / 255])
 
-    plt.imshow(make_contour(showing))
+    pedestrian_color = np.array([28 / 255, 81 / 255, 227 / 255])  # blu
+    semantic_color = np.array([255 / 255, 128 / 255, 0 / 255])    # arancione
+    lane_color = np.array([84 / 255, 70 / 255, 70 / 255])  #grigio scuro color
+    collision_colors = [pedestrian_color, semantic_color,np.array([1,1,1]),lane_color]
+    #showing plot without traj
+    showing_flipped = np.flipud(showing)
+    plt.imshow(make_contour(showing_flipped))
     plt.axis('off')
+    showing_corrected = np.fliplr(showing)
 
     # --- Prepara coordinate e dimensioni veicolo ---
     bx = np.array([-50.0 + 0.5/2.0, -50.0 + 0.5/2.0])
@@ -367,8 +387,10 @@ def save(output, labels, batch, n_present, frame, save_path,
         planned[:, 0] = -planned[:, 0]
         planned = (planned[:, :2] - bx) / dx
         ax_traj_orig.plot(planned[:, 0], planned[:, 1], linewidth=2.0, color='red', label='Planned Trajectory')
+        hit = check_pixel_collision(planned, showing_corrected, bx, dx, collision_colors)
 
-    ax_traj_orig.legend()
+        if hit:
+          ax_traj_orig.plot(hit[0], hit[1], 'x', color='black', markersize=10) 
     ax_traj_orig.set_title('Original Trajectory')
 
     # --- Plot traiettoria dopo intervento (CaCE) (gs[:,5]) ---
@@ -391,9 +413,13 @@ def save(output, labels, batch, n_present, frame, save_path,
           planned[:, 0] = -planned[:, 0]
           planned = (planned[:, :2] - bx) / dx
           ax_traj_interv.plot(planned[:, 0], planned[:, 1], linewidth=2.0, color='red', label='Planned Trajectory')
-
+        
         ax_traj_interv.plot(final_interv[:, 0], final_interv[:, 1], linewidth=2.0, color='blue', label='Intervened Trajectory')
+        hit = check_pixel_collision(final_interv, showing_corrected, bx, dx, collision_colors)
 
+        if hit:
+          ax_traj_interv.plot(hit[0], hit[1], 'x', color='black', markersize=10)     
+        
         ax_traj_interv.legend()
         ax_traj_interv.set_title('Trajectory after Intervention')
         fig2.savefig(save_path / ('%04d_intervened.png' % frame))
@@ -402,6 +428,106 @@ def save(output, labels, batch, n_present, frame, save_path,
     plt.savefig(save_path / ('%04d.png' % frame))
     plt.close()
 
+    import subprocess
+    
+    
+
+    def explain_with_ollama(costs_current, costs_planned, model='mistral'):
+        # Helper to format cost dict with tensors on CUDA
+        def format_costs(costs):
+            return ', '.join(
+                f"{k}={v.cpu().item():.4f}"
+                for k, v in costs.items()
+            )
+
+        prompt = f"""
+        You are an expert autonomous vehicle assistant specialized in Explainable AI.
+
+        Here is important context about the cost components used to evaluate trajectories:
+
+        - The safety cost penalizes trajectories that intersect with predicted obstacles such as vehicles or pedestrians. It is sensitive to vehicle velocity, assigning higher penalties for collisions at higher speeds, relying on accurate obstacle prediction from semantic segmentation.
+
+        - The headway cost enforces safe following distances by penalizing trajectories that enter a zone approximately ten meters behind detected vehicles, ensuring proper longitudinal spacing.
+
+        - The lane divider cost discourages unsafe or illegal lane changes by penalizing trajectories close to lane boundaries, using detailed lane marking segmentation.
+
+        - The cost volume is a learned component that captures latent preferences for comfort, efficiency, and risk avoidance, based on training data rather than fixed rules.
+
+        - The rule cost enforces legal and physical constraints by penalizing trajectories that leave the predicted drivable area, preventing paths that cross sidewalks or off-road zones.
+
+        Below are the costs for two trajectories:
+
+        Current trajectory costs: {format_costs(costs_current)}
+        Planned trajectory costs: {format_costs(costs_planned)}
+
+        Please explain shortly why the planned trajectory was chosen over the current one.
+        Provide the explaination in form of a list.  
+        Discuss which costs the model weighted more heavily in making this decision.  
+        Note: For the progress cost, assume that lower values indicate better outcomes.
+         
+        """
+        # Run ollama CLI with prompt encoded as bytes
+        result = subprocess.run(
+            ["ollama", "run", model],
+            input=prompt,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        if result.returncode != 0:
+            print("Error:", result.stderr)
+            return None
+        return result.stdout.strip()
+
+
+    def explain_trajectory_change(current, planned, thresholds=None):
+        """
+        Generate explainability insights based on the difference between current and planned trajectory costs.
+
+        Parameters:
+            current (dict): Normalized costs for the current trajectory.
+            planned (dict): Normalized costs for the selected/planned trajectory.
+            thresholds (dict): Optional thresholds for explainability triggers.
+
+        Returns:
+            insights (list): List of human-readable reasons for choosing the planned trajectory.
+        """
+
+        if thresholds is None:
+            thresholds = {
+                "safety": 0.05,
+                "costvolume": 0.05,
+                "progress_gain_min": 0.15,
+                "progress_drop_tolerated": -0.15
+            }
+
+        insights = []
+
+        delta = {key: current[key] - planned[key] for key in current}
+
+        # Rule 1: Progress alone isn’t worth increased risk or complexity
+        if delta["progress"] > thresholds["progress_gain_min"]:
+            if delta["safety"] > thresholds["safety"] or delta["costvolume"] > thresholds["costvolume"]:
+                insights.append(f"Model avoided a faster trajectory due to increased safety risk or execution complexity.\n")
+
+        # Rule 2: Chose safer trajectory
+        if delta["safety"] > thresholds["safety"]:
+            insights.append(f"Selected trajectory is significantly safer than current direction.\n")
+
+        # Rule 3: Chose simpler (lower costvolume) trajectory
+        if delta["costvolume"] > thresholds["costvolume"]:
+            insights.append(f"Selected trajectory is more aligned with training data.\n")
+
+        # Rule 4: Progress tradeoff was acceptable
+        if delta["progress"] < thresholds["progress_drop_tolerated"]:
+            insights.append(f"Model sacrificed speed for better safety or simplicity.\n")
+
+        # Rule 5: Everything is nearly the same — no strong reason
+        if not insights:
+            insights.append(f"Selected trajectory is marginally better overall.\n")
+
+        return insights
+    
     # --- Funzione per etichettare i costi ---
     def label_cost(val):
         if val < 0.3:
@@ -410,6 +536,8 @@ def save(output, labels, batch, n_present, frame, save_path,
             return "medium"
         else:
             return "high"
+        
+    
 
     # --- Salvataggio costi con label ---
     if aggregated_costs is not None:
@@ -474,6 +602,21 @@ def save(output, labels, batch, n_present, frame, save_path,
                 f.write(f"{concept}: {cost_val:.4f} ({label_cost(cost_val)})\n")
 
             f.write(f"####################\n\n")
+
+            # Insights from current trajectory and future planned one:
+            # translation of the numeric differences into semantically meaningful insights
+            #insights = explain_trajectory_change(norm_current, norm_best)
+            print(norm_current)
+            insights = explain_with_ollama(norm_current, norm_best, 'mistral') 
+            f.write(f"Insights from LLM of current trajectory and future planned one:\n\n")
+            #for insight in insights:
+            #    f.write(insight) 
+            f.write(insights)
+
+            
+            
+            
+            f.write(f"\n####################\n\n")
 
             # Costi dopo intervento (CaCE)
             if aggregated_costs_intervened is not None:
