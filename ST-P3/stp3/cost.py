@@ -52,15 +52,16 @@ class Cost_Function(nn.Module):
         rulecost = torch.clamp(self.rulecost(trajs, drivable_area), 0, 100)
         costvolume = torch.clamp(self.costvolume(trajs, cost_volume), 0, 100)
 
-        # Debug prints for cost stats
-        # print(f"[forward] safetycost min/max/mean: {safetycost.min().item():.4f}/{safetycost.max().item():.4f}/{safetycost.mean().item():.4f}")
-        # print(f"[forward] headwaycost min/max/mean: {headwaycost.min().item():.4f}/{headwaycost.max().item():.4f}/{headwaycost.mean().item():.4f}")
-        # print(f"[forward] lrdividercost min/max/mean: {lrdividercost.min().item():.4f}/{lrdividercost.max().item():.4f}/{lrdividercost.mean().item():.4f}")
-        # print(f"[forward] comfortcost min/max/mean: {comfortcost.min().item():.4f}/{comfortcost.max().item():.4f}/{comfortcost.mean().item():.4f}")
-        # print(f"[forward] progresscost min/max/mean: {progresscost.min().item():.4f}/{progresscost.max().item():.4f}/{progresscost.mean().item():.4f}")
-        # print(f"[forward] rulecost min/max/mean: {rulecost.min().item():.4f}/{rulecost.max().item():.4f}/{rulecost.mean().item():.4f}")
-        # print(f"[forward] costvolume min/max/mean: {costvolume.min().item():.4f}/{costvolume.max().item():.4f}/{costvolume.mean().item():.4f}")
-
+        # Collect all costs for explainability
+        all_costs = {
+            "safety": safetycost,
+            "headway": headwaycost,
+            "lrdivider": lrdividercost,
+            "rule": rulecost,
+            "costvolume": costvolume,
+            "comfort": comfortcost,
+            "progress": progresscost
+        }
         
 
         # Compute combined costs
@@ -73,20 +74,7 @@ class Cost_Function(nn.Module):
         )
         cost_fc = comfortcost + progresscost
 
-        # Debug combined costs
-        # print(f"[forward] cost_fo min/max/mean: {cost_fo.min().item():.4f}/{cost_fo.max().item():.4f}/{cost_fo.mean().item():.4f}")
-        # print(f"[forward] cost_fc min/max/mean: {cost_fc.min().item():.4f}/{cost_fc.max().item():.4f}/{cost_fc.mean().item():.4f}")
-
-        # Collect all costs for explainability
-        all_costs = {
-            "safety": safetycost,
-            "headway": headwaycost,
-            "lrdivider": lrdividercost,
-            "rule": rulecost,
-            "costvolume": costvolume,
-            "comfort": comfortcost,
-            "progress": progresscost
-        }
+        
 
         return cost_fc, cost_fo, all_costs, safetycost
 
