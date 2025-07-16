@@ -54,11 +54,11 @@ class Cost_Function(nn.Module):
 
         # Collect all costs for explainability
         all_costs = {
-            "safety": safetycost,
-            "headway": headwaycost,
-            "lrdivider": lrdividercost,
-            "rule": rulecost,
-            "costvolume": costvolume,
+            "safety": concept_mask.get("obstacle", 1.0) * safetycost,
+            "headway": concept_mask.get("drivable_area", 1.0) * headwaycost,
+            "lrdivider": concept_mask.get("lane_divider", 1.0) * lrdividercost,
+            "rule": concept_mask.get("rule", 1.0) * rulecost,
+            "costvolume": concept_mask.get("cost_volume", 1.0) * costvolume,
             "comfort": comfortcost,
             "progress": progresscost
         }
