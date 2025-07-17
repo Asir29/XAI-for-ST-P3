@@ -36,8 +36,9 @@ To change how the LLM focuses on the cost explanation logic, modify the prompt s
 the function "explain_with_ollama"
 in the file "ST-P3/evaluate.py"
 
-### 👁️ "Forgetting to See" 
-To simulate the model **missing visual input of certain elements** (e.g., pedestrians, obstacles), intervene on the occupancy map predictions by zeroing out or modifying specific class predictions in "ST-P3/evaluate.py"
+### 👁️ "Forgetting to See"  
+To simulate the model **missing visual input of certain elements** (e.g., pedestrians, obstacles), intervene on the occupancy map predictions by modifying the variable `occupancy_intervened` in `"ST-P3/evaluate.py"`, changing what the model "sees" during planning to observe how the planned trajectory is affected.
+
 
 
 
